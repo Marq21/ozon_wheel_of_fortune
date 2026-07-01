@@ -20,6 +20,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     private readonly string _dbPath;
     private readonly App.StorageMode _storageMode;
 
+    private bool _isSoundEnabled = true;
+
     private bool _showAllPlayers;
     public bool ShowAllPlayers
     {
@@ -93,6 +95,20 @@ public sealed class MainViewModel : INotifyPropertyChanged
     {
         get => _isSpinning;
         set { if (_isSpinning != value) { _isSpinning = value; OnPropertyChanged(); } }
+    }
+
+    public bool IsSoundEnabled
+    {
+        get => _isSoundEnabled;
+        set
+        {
+            if (_isSoundEnabled != value)
+            {
+                _isSoundEnabled = value;
+                _sound.IsEnabled = value;
+                OnPropertyChanged();
+            }
+        }
     }
 
     public ICommand AddCommand { get; }
@@ -386,15 +402,24 @@ public sealed class MainViewModel : INotifyPropertyChanged
     /// <summary>Выполняет действие по секретному коду.</summary>
     private void ExecuteSecretCode(string code)
     {
-        switch (code)
+        // Разбираем код с параметрами (например, "ТЕСТ 100")
+        var parts = code.Split(' ', 2);
+        var command = parts[0];
+        var parameter = parts.Length > 1 ? parts[1] : null;
+
+        switch (command)
         {
             case "ПОМОЩЬ":
             case "HELP":
                 MessageBox.Show(
-                    "Доступные секретные коды:\n\n" +
+                    "Доступные секретные команды:\n\n" +
                     "• СБРОС — сбросить все коэффициенты до 1\n" +
                     "• СТАТА — сбросить статистику (участия/победы)\n" +
                     "• ОБНУЛИТЬ — полностью очистить базу данных\n" +
+                    "• ЭКСПОРТ — быстрый экспорт в папку с БД\n" +
+                    "• РЕЖИМ — переключить режим хранения (Portable/AppData)\n" +
+                    "• ЗВУК ON / ЗВУК OFF — включить/выключить звуки\n" +
+                    "• ТЕСТ N — запустить N розыгрышей для проверки (например, ТЕСТ 100)\n" +
                     "• ПОМОЩЬ — показать это окно\n\n" +
                     "Горячая клавиша: Ctrl+Shift+K",
                     "Секретные команды",
@@ -447,7 +472,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     MessageBoxImage.Warning);
                 if (res3 != MessageBoxResult.Yes) return;
 
-                // Второе подтверждение для надёжности
                 var res4 = MessageBox.Show(
                     "Вы ТОЧНО уверены?\nПоследний шанс отменить.",
                     "Финальное подтверждение",
@@ -460,15 +484,229 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 ResultText = "💥 База данных полностью очищена.";
                 break;
 
+            case "ЭКСПОРТ":
+            case "EXPORT":
+                try
+                {
+                    var filePath = _db.QuickExport();
+                    ResultText = $"💾 Быстрый экспорт выполнен: {filePath}";
+                    MessageBox.Show(
+                        $"База экспортирована в:\n{filePath}",
+                        "Экспорт завершён",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                catch (Exception ex)
+                {
+                    ResultText = $"⚠ Ошибка экспорта: {ex.Message}";
+                }
+                break;
+
+            case "РЕЖИМ":
+            case "MODE":
+                SwitchStorageMode();
+                break;
+
+            case "ЗВУК":
+            case "SOUND":
+                if (parameter == "ON")
+                {
+                    IsSoundEnabled = true;
+                    ResultText = "🔊 Звуки включены.";
+                }
+                else if (parameter == "OFF")
+                {
+                    IsSoundEnabled = false;
+                    ResultText = "🔇 Звуки выключены.";
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "Используйте: ЗВУК ON или ЗВУК OFF",
+                        "Неверный параметр",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+                break;
+
+            case "ТЕСТ":
+            case "TEST":
+                if (parameter != null && int.TryParse(parameter, out int testCount))
+                {
+                    RunTestSpins(testCount);
+                }
+                else
+                {
+                    MessageBox.Show(
+                        "Используйте: ТЕСТ N\nгде N — количество розыгрышей (например, ТЕСТ 100)",
+                        "Неверный параметр",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+                break;
+
             default:
                 MessageBox.Show(
-                    $"Неизвестный код: «{code}»\n\nПопробуйте «ПОМОЩЬ».",
+                    $"Неизвестный код: «{command}»\n\nПопробуйте «ПОМОЩЬ».",
                     "Ошибка",
                     MessageBoxButton.OK,
                     MessageBoxImage.Warning);
-                ResultText = $"🔐 Неверный код: {code}";
+                ResultText = $"🔐 Неверный код: {command}";
                 break;
         }
+    }
+
+    // <summary>Переключает режим хранения данных.</summary>
+    private void SwitchStorageMode()
+    {
+        var newMode = _storageMode == App.StorageMode.Portable
+            ? App.StorageMode.AppData
+            : App.StorageMode.Portable;
+
+        var res = MessageBox.Show(
+            $"Переключить режим хранения?\n\n" +
+            $"Текущий: {_storageMode}\n" +
+            $"Новый: {newMode}\n\n" +
+            $"База данных будет перенесена в новое расположение.",
+            "Смена режима",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (res != MessageBoxResult.Yes) return;
+
+        try
+        {
+            // Определяем новый путь
+            string newDbPath;
+            if (newMode == App.StorageMode.Portable)
+            {
+                var exePath = Environment.ProcessPath;
+                var exeFolder = Path.GetDirectoryName(exePath) ?? ".";
+                newDbPath = Path.Combine(exeFolder, "fortune.db");
+            }
+            else
+            {
+                var appDataFolder = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                    "FortuneWheel");
+                Directory.CreateDirectory(appDataFolder);
+                newDbPath = Path.Combine(appDataFolder, "fortune.db");
+            }
+
+            // Копируем БД
+            if (File.Exists(_dbPath))
+            {
+                File.Copy(_dbPath, newDbPath, overwrite: true);
+            }
+
+            // Создаём маркер portable.ini если нужно
+            var exePath2 = Environment.ProcessPath;
+            var exeFolder2 = Path.GetDirectoryName(exePath2) ?? ".";
+            var portableMarker = Path.Combine(exeFolder2, "portable.ini");
+
+            if (newMode == App.StorageMode.Portable && !File.Exists(portableMarker))
+            {
+                File.WriteAllText(portableMarker, "");
+            }
+            else if (newMode == App.StorageMode.AppData && File.Exists(portableMarker))
+            {
+                File.Delete(portableMarker);
+            }
+
+            ResultText = $"🔄 Режим изменён на {newMode}. Перезапустите приложение.";
+            MessageBox.Show(
+                $"Режим хранения изменён на {newMode}.\n\n" +
+                $"Перезапустите приложение для применения изменений.",
+                "Режим изменён",
+                MessageBoxButton.OK,
+                MessageBoxImage.Information);
+        }
+        catch (Exception ex)
+        {
+            ResultText = $"⚠ Ошибка смены режима: {ex.Message}";
+        }
+    }
+
+    /// <summary>Запускает N розыгрышей подряд для проверки алгоритма.</summary>
+    private async void RunTestSpins(int count)
+    {
+        if (count <= 0 || count > 10000)
+        {
+            MessageBox.Show(
+                "Количество должно быть от 1 до 10000.",
+                "Неверный параметр",
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+            return;
+        }
+
+        var res = MessageBox.Show(
+            $"Запустить {count} розыгрышей без анимации?\n\n" +
+            $"Это полезно для проверки распределения побед.",
+            "Тестовый режим",
+            MessageBoxButton.YesNo,
+            MessageBoxImage.Question);
+
+        if (res != MessageBoxResult.Yes) return;
+
+        IsSpinning = true;
+        ResultText = $"🧪 Тест: запускаем {count} розыгрышей...";
+
+        var wins = new Dictionary<int, int>(); // Id → количество побед
+        var participantIds = Players.Where(p => p.IsSelected).Select(p => p.Id).ToList();
+
+        if (participantIds.Count == 0)
+        {
+            ResultText = "⚠ Отметьте хотя бы одного участника.";
+            IsSpinning = false;
+            return;
+        }
+
+        await Task.Run(() =>
+        {
+            for (int i = 0; i < count; i++)
+            {
+                var allModels = Players.Select(p => p.Model).ToList();
+                var (winner, _) = _wheel.Spin(allModels, participantIds);
+                if (winner != null)
+                {
+                    if (!wins.ContainsKey(winner.Id))
+                        wins[winner.Id] = 0;
+                    wins[winner.Id]++;
+                }
+
+                // Обновляем коэффициенты в моделях
+                foreach (var vm in Players)
+                {
+                    var model = allModels.First(m => m.Id == vm.Id);
+                    vm.Model.Coefficient = model.Coefficient;
+                }
+            }
+        });
+
+        // Формируем отчёт
+        var report = new System.Text.StringBuilder();
+        report.AppendLine($"🧪 Результат теста ({count} розыгрышей):\n");
+
+        foreach (var vm in Players.Where(p => participantIds.Contains(p.Id)))
+        {
+            var winCount = wins.GetValueOrDefault(vm.Id, 0);
+            var percent = (double)winCount / count * 100;
+            report.AppendLine($"{vm.Name}: {winCount} побед ({percent:F1}%)");
+        }
+
+        // Сбрасываем коэффициенты после теста
+        _db.ResetCoefficients();
+        LoadPlayers();
+
+        MessageBox.Show(
+            report.ToString(),
+            "Результат теста",
+            MessageBoxButton.OK,
+            MessageBoxImage.Information);
+
+        ResultText = $"🧪 Тест завершён: {count} розыгрышей.";
+        IsSpinning = false;
     }
 
     public event PropertyChangedEventHandler? PropertyChanged;

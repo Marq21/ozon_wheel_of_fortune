@@ -364,4 +364,18 @@ public sealed class DbService
 
         tx.Commit();
     }
+
+    /// <summary>Быстрый экспорт в папку с БД (без диалога).</summary>
+    public string QuickExport()
+    {
+        var csv = ExportToCsv();
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+        var fileName = $"fortune_backup_{timestamp}.csv";
+
+        var dbFolder = Path.GetDirectoryName(_connectionString.Replace("Data Source=", "")) ?? ".";
+        var filePath = Path.Combine(dbFolder, fileName);
+
+        File.WriteAllText(filePath, csv, System.Text.Encoding.UTF8);
+        return filePath;
+    }
 }

@@ -300,10 +300,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
         return vm?.Model.AvgWinCoefficient;
     }
 
+    /// <summary>Анимация «бегущей подсветки» с постепенным замедлением (ускоренная версия).</summary>
     private async Task AnimateWheelAsync(List<PlayerViewModel> participants)
     {
         var rng = new Random();
-        int totalSteps = 28 + rng.Next(10);
+        int totalSteps = 16 + rng.Next(6); // было 28-38, стало 16-22
         try
         {
             for (int i = 0; i < totalSteps; i++)
@@ -311,11 +312,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 var target = participants[rng.Next(participants.Count)];
                 foreach (var p in participants) p.IsHighlighted = false;
                 target.IsHighlighted = true;
-
                 _sound.PlayTick();
 
-                int delay = 60 + i * i * 4;
-                await Task.Delay(Math.Min(delay, 600));
+                // Ускоренная кривая: от ~30 мс до ~350 мс (было 60-600)
+                int delay = 30 + i * i * 2;
+                await Task.Delay(Math.Min(delay, 350));
             }
         }
         finally
@@ -391,11 +392,17 @@ public sealed class MainViewModel : INotifyPropertyChanged
             Owner = System.Windows.Application.Current.MainWindow
         };
 
+        // Подписываемся на событие "Применить" — выполняет код без закрытия окна
+        win.ApplyRequested += (_, code) =>
+        {
+            ExecuteSecretCode(code);
+        };
+
         if (win.ShowDialog() != true) return;
 
+        // Если нажали OK — выполняем код (окно уже закроется)
         var code = win.EnteredCode?.Trim().ToUpperInvariant();
         if (string.IsNullOrEmpty(code)) return;
-
         ExecuteSecretCode(code);
     }
 
@@ -412,7 +419,7 @@ public sealed class MainViewModel : INotifyPropertyChanged
             case "ПОМОЩЬ":
             case "HELP":
                 MessageBox.Show(
-                    "Доступные секретные команды:\n\n" +
+                    "Доступные секретные коды:\n\n" +
                     "• СБРОС — сбросить все коэффициенты до 1\n" +
                     "• СТАТА — сбросить статистику (участия/победы)\n" +
                     "• ОБНУЛИТЬ — полностью очистить базу данных\n" +
@@ -421,7 +428,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
                     "• ЗВУК ON / ЗВУК OFF — включить/выключить звуки\n" +
                     "• ТЕСТ N — запустить N розыгрышей для проверки (например, ТЕСТ 100)\n" +
                     "• ПОМОЩЬ — показать это окно\n\n" +
-                    "Горячая клавиша: Ctrl+Shift+K",
+                    "Горячая клавиша: Ctrl+Shift+K\n" +
+                    "Кнопка «Применить» — выполнить команду без закрытия окна",
                     "Секретные команды",
                     MessageBoxButton.OK,
                     MessageBoxImage.Information);
@@ -488,7 +496,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             case "EXPORT":
                 try
                 {
-                    var filePath = _db.QuickExport();
+                    var csv = _db.ExportToCsv();
+                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    var fileName = $"fortune_backup_{timestamp}.csv";
+                    var dbFolder = Path.GetDirectoryName(_dbPath) ?? ".";
+                    var filePath = Path.Combine(dbFolder, fileName);
+                    File.WriteAllText(filePath, csv, System.Text.Encoding.UTF8);
                     ResultText = $"💾 Быстрый экспорт выполнен: {filePath}";
                     MessageBox.Show(
                         $"База экспортирована в:\n{filePath}",
@@ -511,12 +524,12 @@ public sealed class MainViewModel : INotifyPropertyChanged
             case "SOUND":
                 if (parameter == "ON")
                 {
-                    IsSoundEnabled = true;
+                    _sound.IsEnabled = true;
                     ResultText = "🔊 Звуки включены.";
                 }
                 else if (parameter == "OFF")
                 {
-                    IsSoundEnabled = false;
+                    _sound.IsEnabled = false;
                     ResultText = "🔇 Звуки выключены.";
                 }
                 else
@@ -556,7 +569,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    // <summary>Переключает режим хранения данных.</summary>
+
+    /// <summary>Переключает режим хранения данных.</summary>
     private void SwitchStorageMode()
     {
         var newMode = _storageMode == App.StorageMode.Portable
@@ -576,7 +590,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            // Определяем новый путь
             string newDbPath;
             if (newMode == App.StorageMode.Portable)
             {
@@ -593,13 +606,11 @@ public sealed class MainViewModel : INotifyPropertyChanged
                 newDbPath = Path.Combine(appDataFolder, "fortune.db");
             }
 
-            // Копируем БД
             if (File.Exists(_dbPath))
             {
                 File.Copy(_dbPath, newDbPath, overwrite: true);
             }
 
-            // Создаём маркер portable.ini если нужно
             var exePath2 = Environment.ProcessPath;
             var exeFolder2 = Path.GetDirectoryName(exePath2) ?? ".";
             var portableMarker = Path.Combine(exeFolder2, "portable.ini");
@@ -652,7 +663,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         IsSpinning = true;
         ResultText = $"🧪 Тест: запускаем {count} розыгрышей...";
 
-        var wins = new Dictionary<int, int>(); // Id → количество побед
         var participantIds = Players.Where(p => p.IsSelected).Select(p => p.Id).ToList();
 
         if (participantIds.Count == 0)
@@ -662,17 +672,46 @@ public sealed class MainViewModel : INotifyPropertyChanged
             return;
         }
 
+        // Словари для статистики
+        var wins = new Dictionary<int, int>();
+        var winCoefSum = new Dictionary<int, double>();
+        var winCoefMin = new Dictionary<int, int>();
+        var winCoefMax = new Dictionary<int, int>();
+        var coefRanges = new Dictionary<string, int>
+        {
+            ["0-5"] = 0,
+            ["6-10"] = 0,
+            ["11-15"] = 0,
+            ["16-20"] = 0,
+            ["21+"] = 0
+        };
+
         await Task.Run(() =>
         {
             for (int i = 0; i < count; i++)
             {
                 var allModels = Players.Select(p => p.Model).ToList();
-                var (winner, _) = _wheel.Spin(allModels, participantIds);
+                var (winner, coefAtWin) = _wheel.Spin(allModels, participantIds);
                 if (winner != null)
                 {
                     if (!wins.ContainsKey(winner.Id))
+                    {
                         wins[winner.Id] = 0;
+                        winCoefSum[winner.Id] = 0;
+                        winCoefMin[winner.Id] = int.MaxValue;
+                        winCoefMax[winner.Id] = int.MinValue;
+                    }
                     wins[winner.Id]++;
+                    winCoefSum[winner.Id] += coefAtWin;
+                    winCoefMin[winner.Id] = Math.Min(winCoefMin[winner.Id], coefAtWin);
+                    winCoefMax[winner.Id] = Math.Max(winCoefMax[winner.Id], coefAtWin);
+
+                    // Распределяем по диапазонам
+                    if (coefAtWin <= 5) coefRanges["0-5"]++;
+                    else if (coefAtWin <= 10) coefRanges["6-10"]++;
+                    else if (coefAtWin <= 15) coefRanges["11-15"]++;
+                    else if (coefAtWin <= 20) coefRanges["16-20"]++;
+                    else coefRanges["21+"]++;
                 }
 
                 // Обновляем коэффициенты в моделях
@@ -686,24 +725,126 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         // Формируем отчёт
         var report = new System.Text.StringBuilder();
-        report.AppendLine($"🧪 Результат теста ({count} розыгрышей):\n");
+
+        // Заголовок
+        report.AppendLine("═══════════════════════════════════════════════════════════");
+        report.AppendLine($"  🧪 РЕЗУЛЬТАТ ТЕСТИРОВАНИЯ АЛГОРИТМА");
+        report.AppendLine($"  Всего розыгрышей: {count}");
+        report.AppendLine($"  Участников: {participantIds.Count}");
+        report.AppendLine("═══════════════════════════════════════════════════════════");
+        report.AppendLine();
+
+        // Таблица результатов
+        report.AppendLine("┌────────────────────┬────────┬──────────┬──────────┬─────────────┬─────────────┐");
+        report.AppendLine("│ Сотрудник          │ Побед  │ % побед  │ Ср. коэф │ Мин. коэф   │ Макс. коэф  │");
+        report.AppendLine("├────────────────────┼────────┼──────────┼──────────┼─────────────┼─────────────┤");
 
         foreach (var vm in Players.Where(p => participantIds.Contains(p.Id)))
         {
             var winCount = wins.GetValueOrDefault(vm.Id, 0);
             var percent = (double)winCount / count * 100;
-            report.AppendLine($"{vm.Name}: {winCount} побед ({percent:F1}%)");
+            var avgCoef = winCount > 0 ? winCoefSum[vm.Id] / winCount : 0;
+            var minCoef = winCount > 0 ? winCoefMin[vm.Id] : 0;
+            var maxCoef = winCount > 0 ? winCoefMax[vm.Id] : 0;
+
+            var name = vm.Name.Length > 18 ? vm.Name[..18] + ".." : vm.Name.PadRight(18);
+
+            report.AppendLine(
+                $"│ {name} │ {winCount,6} │ {percent,7:F1}% │ {avgCoef,8:F2} │ {minCoef,11} │ {maxCoef,11} │");
         }
+
+        report.AppendLine("└────────────────────┴────────┴──────────┴──────────┴─────────────┴─────────────┘");
+        report.AppendLine();
+
+        // Дополнительная аналитика
+        report.AppendLine("───────────────────────────────────────────────────────────");
+        report.AppendLine("📈 ДОПОЛНИТЕЛЬНАЯ АНАЛИТИКА");
+        report.AppendLine("───────────────────────────────────────────────────────────");
+
+        // Кто чаще всех выигрывал
+        if (wins.Count > 0)
+        {
+            var topWinner = wins.OrderByDescending(x => x.Value).First();
+            var topWinnerVm = Players.First(p => p.Id == topWinner.Key);
+            var topPercent = (double)topWinner.Value / count * 100;
+            report.AppendLine($"🏆 Лидер по победам: {topWinnerVm.Name} ({topWinner.Value} побед, {topPercent:F1}%)");
+        }
+
+        // Кто ни разу не выиграл
+        var losers = Players.Where(p => participantIds.Contains(p.Id) && !wins.ContainsKey(p.Id)).ToList();
+        if (losers.Count > 0)
+        {
+            report.AppendLine($"😢 Ни разу не выиграли: {string.Join(", ", losers.Select(l => l.Name))}");
+        }
+
+        // Распределение по диапазонам коэффициентов
+        report.AppendLine();
+        report.AppendLine("📊 Распределение побед по диапазонам коэффициентов:");
+        foreach (var range in coefRanges)
+        {
+            var percent = (double)range.Value / count * 100;
+            var bar = new string('█', (int)(percent / 2)); // визуальная шкала
+            report.AppendLine($"   {range.Key,-6} : {range.Value,5} ({percent,5:F1}%) {bar}");
+        }
+
+        // Общий средний коэффициент при победе
+        var totalAvgCoef = winCoefSum.Values.Sum() / Math.Max(1, wins.Values.Sum());
+        report.AppendLine();
+        report.AppendLine($"📐 Общий средний коэффициент при победе: {totalAvgCoef:F2}");
+
+        // Справедливость: стандартное отклонение
+        if (wins.Count > 1)
+        {
+            var avgWins = (double)wins.Values.Sum() / wins.Count;
+            var variance = wins.Values.Average(w => Math.Pow(w - avgWins, 2));
+            var stdDev = Math.Sqrt(variance);
+            var cv = avgWins > 0 ? stdDev / avgWins * 100 : 0;
+
+            report.AppendLine($"⚖️  Коэффициент вариации: {cv:F1}%");
+            if (cv < 15)
+                report.AppendLine("   → Отличная справедливость (почти равное распределение)");
+            else if (cv < 30)
+                report.AppendLine("   → Хорошая справедливость");
+            else if (cv < 50)
+                report.AppendLine("   → Умеренная несправедливость");
+            else
+                report.AppendLine("   → Высокая несправедливость (кто-то выигрывает намного чаще)");
+        }
+
+        report.AppendLine();
+        report.AppendLine("═══════════════════════════════════════════════════════════");
 
         // Сбрасываем коэффициенты после теста
         _db.ResetCoefficients();
         LoadPlayers();
 
-        MessageBox.Show(
-            report.ToString(),
-            "Результат теста",
-            MessageBoxButton.OK,
-            MessageBoxImage.Information);
+        // Создаём окно для отображения отчёта с моноширинным шрифтом
+        var resultWindow = new Window
+        {
+            Title = "Результат теста",
+            Width = 750,
+            Height = 600,
+            WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Owner = System.Windows.Application.Current.MainWindow,
+            Background = System.Windows.Media.Brushes.White
+        };
+
+        var textBox = new System.Windows.Controls.TextBox
+        {
+            Text = report.ToString(),
+            IsReadOnly = true,
+            TextWrapping = System.Windows.TextWrapping.NoWrap,
+            FontFamily = new System.Windows.Media.FontFamily("Consolas"),
+            FontSize = 12,
+            VerticalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+            HorizontalScrollBarVisibility = System.Windows.Controls.ScrollBarVisibility.Auto,
+            Padding = new System.Windows.Thickness(10),
+            BorderThickness = new System.Windows.Thickness(0),
+            Background = System.Windows.Media.Brushes.White
+        };
+
+        resultWindow.Content = textBox;
+        resultWindow.ShowDialog();
 
         ResultText = $"🧪 Тест завершён: {count} розыгрышей.";
         IsSpinning = false;

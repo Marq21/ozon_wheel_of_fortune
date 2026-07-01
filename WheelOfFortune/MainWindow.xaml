@@ -6,7 +6,14 @@
         Height="680" Width="950"
         WindowStartupLocation="CenterScreen"
         Background="#F5F5F5">
-
+    
+    <Window.InputBindings>
+        <KeyBinding Key="K"
+                    Modifiers="Ctrl+Shift"
+                    Command="{Binding SecretCodeCommand}"/>
+    </Window.InputBindings>
+    
+    
     <Window.Resources>
         <vm:BoolToColorConverter x:Key="HighlightConverter"/>
         <vm:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisibility"/>

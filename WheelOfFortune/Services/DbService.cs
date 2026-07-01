@@ -298,6 +298,70 @@ public sealed class DbService
             else current.Append(c);
         }
         result.Add(current.ToString());
-        return result.ToArray();
+        return [.. result];
+    }
+
+    /// <summary>Сбрасывает все коэффициенты сотрудников до 1.</summary>
+    public int ResetCoefficients()
+    {
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "UPDATE Players SET Coefficient = 1";
+        return cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>Сбрасывает статистику (Participations, Wins) и историю розыгрышей.</summary>
+    public void ResetStatistics()
+    {
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "UPDATE Players SET Participations = 0, Wins = 0";
+            cmd.ExecuteNonQuery();
+        }
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM SpinHistory";
+            cmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    /// <summary>Полностью очищает базу данных (все таблицы).</summary>
+    public void ResetAll()
+    {
+        using var conn = new SqliteConnection(_connectionString);
+        conn.Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM SpinHistory";
+            cmd.ExecuteNonQuery();
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM Players";
+            cmd.ExecuteNonQuery();
+        }
+        // Сбрасываем счётчик AUTOINCREMENT
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM sqlite_sequence WHERE name='Players'";
+            cmd.ExecuteNonQuery();
+        }
+        using (var cmd = conn.CreateCommand())
+        {
+            cmd.CommandText = "DELETE FROM sqlite_sequence WHERE name='SpinHistory'";
+            cmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
     }
 }

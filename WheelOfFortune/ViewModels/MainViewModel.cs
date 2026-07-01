@@ -66,7 +66,6 @@ public sealed class MainViewModel : INotifyPropertyChanged
         ? "🔌 Portable (данные рядом с exe)"
         : "💾 Обычный режим (данные в %AppData%)";
 
-    public ICommand OpenDbFolderCommand { get; }
 
     private string _newPlayerName = string.Empty;
     public string NewPlayerName
@@ -103,6 +102,8 @@ public sealed class MainViewModel : INotifyPropertyChanged
     public ICommand RestoreCommand { get; }
     public ICommand ExportCommand { get; }
     public ICommand ImportCommand { get; }
+    public ICommand OpenDbFolderCommand { get; }
+    public ICommand SecretCodeCommand { get; }
 
     public MainViewModel(DbService db, string dbPath, App.StorageMode storageMode)
     {
@@ -136,6 +137,9 @@ public sealed class MainViewModel : INotifyPropertyChanged
 
         ExportCommand = new RelayCommand(_ => ExportDatabase(), _ => !IsSpinning);
         ImportCommand = new RelayCommand(_ => ImportDatabase(), _ => !IsSpinning);
+        SecretCodeCommand = new RelayCommand(
+            _ => ShowSecretCodeDialog(),
+            _ => !IsSpinning);
 
         LoadPlayers();
     }
@@ -360,6 +364,110 @@ public sealed class MainViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             ResultText = $"⚠ Ошибка импорта: {ex.Message}";
+        }
+    }
+
+    /// <summary>Открывает окно ввода секретного кода и выполняет действие.</summary>
+    public void ShowSecretCodeDialog()
+    {
+        var win = new FortuneWheel.Views.SecretCodeWindow
+        {
+            Owner = System.Windows.Application.Current.MainWindow
+        };
+
+        if (win.ShowDialog() != true) return;
+
+        var code = win.EnteredCode?.Trim().ToUpperInvariant();
+        if (string.IsNullOrEmpty(code)) return;
+
+        ExecuteSecretCode(code);
+    }
+
+    /// <summary>Выполняет действие по секретному коду.</summary>
+    private void ExecuteSecretCode(string code)
+    {
+        switch (code)
+        {
+            case "ПОМОЩЬ":
+            case "HELP":
+                MessageBox.Show(
+                    "Доступные секретные коды:\n\n" +
+                    "• СБРОС — сбросить все коэффициенты до 1\n" +
+                    "• СТАТА — сбросить статистику (участия/победы)\n" +
+                    "• ОБНУЛИТЬ — полностью очистить базу данных\n" +
+                    "• ПОМОЩЬ — показать это окно\n\n" +
+                    "Горячая клавиша: Ctrl+Shift+K",
+                    "Секретные команды",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+                ResultText = "🔐 Выведен список секретных команд.";
+                break;
+
+            case "СБРОС":
+            case "RESET_COEF":
+                var res1 = MessageBox.Show(
+                    "Сбросить все коэффициенты до 1?\n\n" +
+                    "Статистика (участия/победы) останется нетронутой.",
+                    "Подтверждение сброса коэффициентов",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+                if (res1 != MessageBoxResult.Yes) return;
+
+                var count1 = _db.ResetCoefficients();
+                LoadPlayers();
+                ResultText = $"🔄 Коэффициенты сброшены у {count1} сотрудников.";
+                break;
+
+            case "СТАТА":
+            case "RESET_STATS":
+                var res2 = MessageBox.Show(
+                    "Сбросить статистику (участия и победы)?\n\n" +
+                    "Коэффициенты и список сотрудников останутся нетронутыми.",
+                    "Подтверждение сброса статистики",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Question);
+                if (res2 != MessageBoxResult.Yes) return;
+
+                _db.ResetStatistics();
+                LoadPlayers();
+                ResultText = "📊 Статистика сброшена.";
+                break;
+
+            case "ОБНУЛИТЬ":
+            case "RESET_ALL":
+                var res3 = MessageBox.Show(
+                    "ПОЛНОСТЬЮ очистить базу данных?\n\n" +
+                    "⚠ Будут удалены:\n" +
+                    "• Все сотрудники\n" +
+                    "• Вся история розыгрышей\n" +
+                    "• Вся статистика\n\n" +
+                    "Это действие необратимо!",
+                    "ПОДТВЕРЖДЕНИЕ ПОЛНОГО СБРОСА",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Warning);
+                if (res3 != MessageBoxResult.Yes) return;
+
+                // Второе подтверждение для надёжности
+                var res4 = MessageBox.Show(
+                    "Вы ТОЧНО уверены?\nПоследний шанс отменить.",
+                    "Финальное подтверждение",
+                    MessageBoxButton.YesNo,
+                    MessageBoxImage.Error);
+                if (res4 != MessageBoxResult.Yes) return;
+
+                _db.ResetAll();
+                LoadPlayers();
+                ResultText = "💥 База данных полностью очищена.";
+                break;
+
+            default:
+                MessageBox.Show(
+                    $"Неизвестный код: «{code}»\n\nПопробуйте «ПОМОЩЬ».",
+                    "Ошибка",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                ResultText = $"🔐 Неверный код: {code}";
+                break;
         }
     }
 

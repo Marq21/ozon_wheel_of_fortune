@@ -8,13 +8,19 @@
 		<RootNamespace>FortuneWheel</RootNamespace>
 		<AssemblyName>FortuneWheel</AssemblyName>
 		<ApplicationManifest>app.manifest</ApplicationManifest>
+
+		<PublishSingleFile>true</PublishSingleFile>
+		<SelfContained>true</SelfContained>
+		<RuntimeIdentifier>win-x64</RuntimeIdentifier>
+		<IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+		<EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
+
 	</PropertyGroup>
 
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
 	</ItemGroup>
 
-	<!-- Включаем звуки как Embedded Resources (для single-file exe) -->
 	<ItemGroup>
 		<EmbeddedResource Include="Sounds\*.wav" />
 	</ItemGroup>

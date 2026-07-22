@@ -71,12 +71,11 @@ public sealed class WheelService
 
     /// <summary>
     /// Адаптивный множитель для формулы веса.
-    /// 1–5 участников → 1.0 (линейная), 9+ → 2.0 (квадратичная), между — плавная интерполяция.
     /// </summary>
     private static double GetMultiplier(int participantCount)
     {
-        if (participantCount <= 5) return 1.0;
-        if (participantCount >= 9) return 2.0;
-        return 1.0 + (participantCount - 5) * 0.25;
+        if (participantCount <= 5) return 2.5 + (5 - participantCount) * 0.25f;
+        if (participantCount >= 9) return 3;
+        return 2.5 + (participantCount - 5) * 0.25f;
     }
 }
